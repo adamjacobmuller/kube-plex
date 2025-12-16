@@ -1,0 +1,26 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kube-plex-webhook
+  namespace: kube-plex-system
+  labels:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: webhook
+---
+# The webhook itself doesn't need special permissions,
+# but the injected pods need to create transcoder pods.
+# This ClusterRole can be bound to Plex pod service accounts.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kube-plex-transcoder
+  labels:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: transcoder
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "delete", "get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]

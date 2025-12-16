@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: kube-plex-system
+
+resources:
+  - namespace.yaml
+  - rbac.yaml
+  - deployment.yaml
+  - service.yaml
+  - webhook-config.yaml
+  # Uncomment if using cert-manager:
+  # - certificate.yaml
+
+commonLabels:
+  app.kubernetes.io/name: kube-plex
+  app.kubernetes.io/component: webhook
+
+images:
+  - name: ghcr.io/adamjacobmuller/kube-plex-webhook
+    newTag: latest

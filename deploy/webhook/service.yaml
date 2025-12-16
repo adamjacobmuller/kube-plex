@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kube-plex-webhook
+  namespace: kube-plex-system
+  labels:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: webhook
+spec:
+  ports:
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: webhook

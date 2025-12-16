@@ -1,0 +1,31 @@
+# Certificate for webhook TLS using cert-manager
+# If not using cert-manager, generate certs manually and create the secret
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kube-plex-webhook
+  namespace: kube-plex-system
+  labels:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: webhook
+spec:
+  secretName: kube-plex-webhook-tls
+  dnsNames:
+    - kube-plex-webhook
+    - kube-plex-webhook.kube-plex-system
+    - kube-plex-webhook.kube-plex-system.svc
+    - kube-plex-webhook.kube-plex-system.svc.cluster.local
+  issuerRef:
+    name: kube-plex-selfsigned
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: kube-plex-selfsigned
+  namespace: kube-plex-system
+  labels:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: webhook
+spec:
+  selfSigned: {}
