@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kube-plex-transcode
+  labels:
+    app.kubernetes.io/name: kube-plex
+    app.kubernetes.io/component: transcode
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 50Gi
+  # storageClassName: ""  # Uncomment and set to use a specific storage class

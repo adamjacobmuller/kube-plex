@@ -10,21 +10,24 @@ import (
 
 const (
 	// Annotations
-	AnnotationEnabled       = "kube-plex.io/enabled"
-	AnnotationPMSService    = "kube-plex.io/pms-service"
-	AnnotationDataPVC       = "kube-plex.io/data-pvc"
-	AnnotationConfigPVC     = "kube-plex.io/config-pvc"
-	AnnotationTranscodePVC  = "kube-plex.io/transcode-pvc"
-	AnnotationPMSContainer  = "kube-plex.io/pms-container"
-	AnnotationPMSImage      = "kube-plex.io/pms-image"
-	AnnotationKubePlexImage = "kube-plex.io/kube-plex-image"
+	AnnotationEnabled        = "kube-plex.io/enabled"
+	AnnotationPMSService     = "kube-plex.io/pms-service"
+	AnnotationDataPVC        = "kube-plex.io/data-pvc"
+	AnnotationTranscodePVC   = "kube-plex.io/transcode-pvc"
+	AnnotationTranscodeMount = "kube-plex.io/transcode-mount"
+	AnnotationPMSContainer   = "kube-plex.io/pms-container"
+	AnnotationPMSImage       = "kube-plex.io/pms-image"
+	AnnotationKubePlexImage  = "kube-plex.io/kube-plex-image"
 
 	// Defaults
-	DefaultKubePlexImage = "ghcr.io/adamjacobmuller/kube-plex:latest"
+	DefaultKubePlexImage   = "ghcr.io/adamjacobmuller/kube-plex:latest"
+	DefaultTranscodeMount  = "/transcode"
+	DefaultTranscodePVC    = "kube-plex-transcode"
 
 	// Volume/mount names
-	kubePlexBinaryVolume = "kube-plex-binary"
-	kubePlexBinaryMount  = "/shared"
+	kubePlexBinaryVolume  = "kube-plex-binary"
+	kubePlexBinaryMount   = "/shared"
+	kubePlexTranscodeVol  = "kube-plex-transcode"
 )
 
 // PatchOperation represents a JSON patch operation
@@ -36,14 +39,14 @@ type PatchOperation struct {
 
 // Config holds the configuration extracted from annotations
 type Config struct {
-	PMSService    string
-	DataPVC       string
-	ConfigPVC     string
-	TranscodePVC  string
-	PMSContainer  string
-	PMSImage      string
-	KubePlexImage string
-	Namespace     string
+	PMSService     string
+	DataPVC        string
+	TranscodePVC   string
+	TranscodeMount string
+	PMSContainer   string
+	PMSImage       string
+	KubePlexImage  string
+	Namespace      string
 }
 
 // ShouldMutate checks if the pod should be mutated based on annotations
@@ -70,17 +73,22 @@ func ExtractConfig(pod *corev1.Pod, namespace string) (*Config, error) {
 
 	// Get PVC names - try annotations first, then auto-detect from volumes
 	cfg.DataPVC = annotations[AnnotationDataPVC]
-	cfg.ConfigPVC = annotations[AnnotationConfigPVC]
 	cfg.TranscodePVC = annotations[AnnotationTranscodePVC]
 
-	// Auto-detect PVCs from volume mounts if not specified
-	if cfg.DataPVC == "" || cfg.ConfigPVC == "" || cfg.TranscodePVC == "" {
+	// Auto-detect data PVC from volume mounts if not specified
+	if cfg.DataPVC == "" {
 		detectPVCs(pod, cfg)
 	}
 
-	// Validate required PVCs
+	// Use default transcode PVC if not specified
 	if cfg.TranscodePVC == "" {
-		return nil, fmt.Errorf("transcode PVC is required: set %s annotation", AnnotationTranscodePVC)
+		cfg.TranscodePVC = DefaultTranscodePVC
+	}
+
+	// Get transcode mount path
+	cfg.TranscodeMount = annotations[AnnotationTranscodeMount]
+	if cfg.TranscodeMount == "" {
+		cfg.TranscodeMount = DefaultTranscodeMount
 	}
 
 	// Get container name (default to first container)
@@ -117,19 +125,11 @@ func detectPVCs(pod *corev1.Pod, cfg *Config) {
 		}
 		pvcName := vol.PersistentVolumeClaim.ClaimName
 
-		// Try to match by volume name or mount path
+		// Try to match by volume name
 		switch strings.ToLower(vol.Name) {
 		case "data":
 			if cfg.DataPVC == "" {
 				cfg.DataPVC = pvcName
-			}
-		case "config":
-			if cfg.ConfigPVC == "" {
-				cfg.ConfigPVC = pvcName
-			}
-		case "transcode":
-			if cfg.TranscodePVC == "" {
-				cfg.TranscodePVC = pvcName
 			}
 		}
 	}
@@ -159,7 +159,17 @@ func CreatePatch(pod *corev1.Pod, cfg *Config) ([]byte, error) {
 		},
 	}))
 
-	// 2. Add init container to copy kube-plex binary
+	// 2. Add transcode PVC volume
+	patches = append(patches, addVolume(pod, corev1.Volume{
+		Name: kubePlexTranscodeVol,
+		VolumeSource: corev1.VolumeSource{
+			PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: cfg.TranscodePVC,
+			},
+		},
+	}))
+
+	// 3. Add init container to copy kube-plex binary
 	initContainer := corev1.Container{
 		Name:    "kube-plex-init",
 		Image:   cfg.KubePlexImage,
@@ -173,16 +183,22 @@ func CreatePatch(pod *corev1.Pod, cfg *Config) ([]byte, error) {
 	}
 	patches = append(patches, addInitContainer(pod, initContainer))
 
-	// 3. Add volume mount for kube-plex binary to PMS container
+	// 4. Add volume mount for kube-plex binary to PMS container
 	patches = append(patches, addVolumeMount(pod, pmsContainerIdx, corev1.VolumeMount{
 		Name:      kubePlexBinaryVolume,
 		MountPath: kubePlexBinaryMount,
 	}))
 
-	// 4. Add postStart lifecycle hook to replace transcoder
+	// 5. Add transcode volume mount to PMS container
+	patches = append(patches, addVolumeMount(pod, pmsContainerIdx, corev1.VolumeMount{
+		Name:      kubePlexTranscodeVol,
+		MountPath: cfg.TranscodeMount,
+	}))
+
+	// 6. Add postStart lifecycle hook to replace transcoder
 	patches = append(patches, addLifecycleHook(pod, pmsContainerIdx))
 
-	// 5. Add environment variables for kube-plex
+	// 7. Add environment variables for kube-plex
 	envVars := buildEnvVars(cfg)
 	for _, env := range envVars {
 		patches = append(patches, addEnvVar(pod, pmsContainerIdx, env))
@@ -311,9 +327,6 @@ func buildEnvVars(cfg *Config) []corev1.EnvVar {
 
 	if cfg.DataPVC != "" {
 		vars = append(vars, corev1.EnvVar{Name: "DATA_PVC", Value: cfg.DataPVC})
-	}
-	if cfg.ConfigPVC != "" {
-		vars = append(vars, corev1.EnvVar{Name: "CONFIG_PVC", Value: cfg.ConfigPVC})
 	}
 
 	// Build PMS internal address

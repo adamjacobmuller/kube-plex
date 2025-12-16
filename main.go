@@ -18,9 +18,6 @@ import (
 // data pvc name
 var dataPVC = os.Getenv("DATA_PVC")
 
-// config pvc name
-var configPVC = os.Getenv("CONFIG_PVC")
-
 // transcode pvc name
 var transcodePVC = os.Getenv("TRANSCODE_PVC")
 
@@ -102,66 +99,59 @@ func rewriteArgs(in []string) {
 
 func generatePod(cwd string, env []string, args []string) *corev1.Pod {
 	envVars := toCoreV1EnvVar(env)
+
+	volumeMounts := []corev1.VolumeMount{
+		{
+			Name:      "transcode",
+			MountPath: "/transcode",
+		},
+	}
+
+	volumes := []corev1.Volume{
+		{
+			Name: "transcode",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: transcodePVC,
+				},
+			},
+		},
+	}
+
+	// Add data volume if specified
+	if dataPVC != "" {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "data",
+			MountPath: "/data",
+			ReadOnly:  true,
+		})
+		volumes = append(volumes, corev1.Volume{
+			Name: "data",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: dataPVC,
+				},
+			},
+		})
+	}
+
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "pms-elastic-transcoder-",
 		},
 		Spec: corev1.PodSpec{
-			NodeSelector: map[string]string{
-				"beta.kubernetes.io/arch": "amd64",
-			},
 			RestartPolicy: corev1.RestartPolicyNever,
 			Containers: []corev1.Container{
 				{
-					Name:       "plex",
-					Command:    args,
-					Image:      pmsImage,
-					Env:        envVars,
-					WorkingDir: cwd,
-					VolumeMounts: []corev1.VolumeMount{
-						{
-							Name:      "data",
-							MountPath: "/data",
-							ReadOnly:  true,
-						},
-						{
-							Name:      "config",
-							MountPath: "/config",
-							ReadOnly:  true,
-						},
-						{
-							Name:      "transcode",
-							MountPath: "/transcode",
-						},
-					},
+					Name:         "plex",
+					Command:      args,
+					Image:        pmsImage,
+					Env:          envVars,
+					WorkingDir:   cwd,
+					VolumeMounts: volumeMounts,
 				},
 			},
-			Volumes: []corev1.Volume{
-				{
-					Name: "data",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: dataPVC,
-						},
-					},
-				},
-				{
-					Name: "config",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: configPVC,
-						},
-					},
-				},
-				{
-					Name: "transcode",
-					VolumeSource: corev1.VolumeSource{
-						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
-							ClaimName: transcodePVC,
-						},
-					},
-				},
-			},
+			Volumes: volumes,
 		},
 	}
 }

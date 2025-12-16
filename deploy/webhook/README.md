@@ -7,17 +7,21 @@ A MutatingAdmissionWebhook that automatically injects kube-plex transcoder suppo
 When a pod with the annotation `kube-plex.io/enabled: "true"` is created, the webhook mutates it to:
 
 1. Add an init container that copies the kube-plex binary
-2. Add a postStart lifecycle hook that replaces the Plex Transcoder
-3. Inject environment variables for kube-plex configuration
+2. Add a transcode PVC volume and mount it to the Plex container
+3. Add a postStart lifecycle hook that replaces the Plex Transcoder
+4. Inject environment variables for kube-plex configuration
 
 ## Prerequisites
 
 - Kubernetes 1.19+
 - cert-manager (recommended) or manual TLS certificate generation
+- ReadWriteMany storage for the transcode PVC
 
 ## Installation
 
-### With cert-manager (recommended)
+### 1. Deploy the webhook (in kube-plex-system namespace)
+
+#### With cert-manager (recommended)
 
 ```bash
 # Uncomment certificate.yaml in kustomization.yaml, then:
@@ -28,7 +32,7 @@ kubectl annotate mutatingwebhookconfiguration kube-plex-webhook \
   cert-manager.io/inject-ca-from=kube-plex-system/kube-plex-webhook
 ```
 
-### Without cert-manager
+#### Without cert-manager
 
 ```bash
 # Create namespace first
@@ -41,24 +45,35 @@ kubectl create namespace kube-plex-system
 kubectl apply -k deploy/webhook/
 ```
 
+### 2. Deploy client resources (in your Plex namespace)
+
+```bash
+# Edit deploy/client/kustomization.yaml to set your namespace
+# Edit deploy/client/rbac.yaml to set your Plex ServiceAccount name
+
+kubectl apply -k deploy/client/
+```
+
+This creates:
+- `kube-plex-transcode` PVC for transcoder output
+- RoleBinding to allow Plex to create transcoder pods
+
 ## Usage
 
 ### Annotations
 
-Add these annotations to your Plex pod:
+Add these annotations to your Plex pod template:
 
-| Annotation | Required | Description |
-|------------|----------|-------------|
-| `kube-plex.io/enabled` | Yes | Set to `"true"` to enable injection |
-| `kube-plex.io/transcode-pvc` | Yes* | Name of the transcode PVC |
-| `kube-plex.io/data-pvc` | No | Name of the data PVC (auto-detected if volume named "data" exists) |
-| `kube-plex.io/config-pvc` | No | Name of the config PVC (auto-detected if volume named "config" exists) |
-| `kube-plex.io/pms-service` | No | Service name for PMS internal address |
-| `kube-plex.io/pms-container` | No | Name of the PMS container (defaults to first container) |
-| `kube-plex.io/pms-image` | No | Image for transcoder pods (defaults to container's image) |
-| `kube-plex.io/kube-plex-image` | No | kube-plex image (defaults to `ghcr.io/munnerz/kube-plex:latest`) |
-
-*The transcode PVC can be auto-detected if a volume named "transcode" exists.
+| Annotation | Required | Default | Description |
+|------------|----------|---------|-------------|
+| `kube-plex.io/enabled` | Yes | - | Set to `"true"` to enable injection |
+| `kube-plex.io/transcode-pvc` | No | `kube-plex-transcode` | Name of the transcode PVC |
+| `kube-plex.io/transcode-mount` | No | `/transcode` | Mount path for transcode volume |
+| `kube-plex.io/data-pvc` | No | auto-detect | Name of the data/media PVC |
+| `kube-plex.io/pms-service` | No | - | Service name for PMS internal address |
+| `kube-plex.io/pms-container` | No | first container | Name of the PMS container |
+| `kube-plex.io/pms-image` | No | container's image | Image for transcoder pods |
+| `kube-plex.io/kube-plex-image` | No | `ghcr.io/adamjacobmuller/kube-plex:latest` | kube-plex image |
 
 ### Example Pod
 
@@ -69,9 +84,9 @@ metadata:
   name: plex
   annotations:
     kube-plex.io/enabled: "true"
-    kube-plex.io/transcode-pvc: "plex-transcode"
     kube-plex.io/pms-service: "plex"
 spec:
+  serviceAccountName: plex
   containers:
     - name: plex
       image: plexinc/pms-docker:latest
@@ -80,8 +95,6 @@ spec:
           mountPath: /config
         - name: data
           mountPath: /data
-        - name: transcode
-          mountPath: /transcode
   volumes:
     - name: config
       persistentVolumeClaim:
@@ -89,30 +102,13 @@ spec:
     - name: data
       persistentVolumeClaim:
         claimName: plex-data
-    - name: transcode
-      persistentVolumeClaim:
-        claimName: plex-transcode
 ```
 
-### RBAC for Transcoder Pods
-
-The Plex pod's ServiceAccount needs permission to create transcoder pods. Bind the `kube-plex-transcoder` ClusterRole:
-
-```yaml
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: plex-kube-plex
-  namespace: plex
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kube-plex-transcoder
-subjects:
-  - kind: ServiceAccount
-    name: plex
-    namespace: plex
-```
+The webhook will automatically add:
+- Transcode PVC volume and mount
+- Init container to copy kube-plex binary
+- PostStart hook to replace the transcoder
+- Environment variables for kube-plex
 
 ## Building
 
